@@ -1,3 +1,6 @@
+
+
+
 const Scratch = window.Scratch = window.Scratch || {};
 
 const ASSET_SERVER = 'https://cdn.assets.scratch.mit.edu/';
@@ -40,36 +43,136 @@ const getAssetUrl = function (asset) {
     return assetUrlParts.join('');
 };
 
+function loadJSON(path, success, error)
+{
+    var xhr = new XMLHttpRequest();
+    xhr.onreadystatechange = function()
+    {
+        if (xhr.readyState === XMLHttpRequest.DONE) {
+            if (xhr.status === 200) {
+                if (success)
+                    success(JSON.parse(xhr.responseText));
+            } else {
+                if (error)
+                    error(xhr);
+            }
+        }
+    };
+    xhr.open("GET", path, true);
+    xhr.send();
+}
+
+//Jibo UTILS
+function getBase64FromImageUrl(url,cb) {
+    var img = new Image();
+
+    img.setAttribute('crossOrigin', 'anonymous');
+
+    img.onload = function () {
+        var canvas = document.createElement("canvas");
+        canvas.width =1280;
+        canvas.height =720;
+
+        var ctx = canvas.getContext("2d");
+        ctx.drawImage(this, 0, 0);
+
+        var dataURL = canvas.toDataURL("image/jpeg");
+        cb(dataURL);
+
+    };
+
+    img.src = url;
+}
+
+function populateMedia(callback)
+{
+    //populate images
+    $.getJSON( "./src/playground/assets/image-list.json", {
+        tagmode: "any",
+        format: "json"
+    })
+    .done(function( data ) {
+        console.log(data);
+        if (data.length < 1){
+            Blockly.Blocks['jibo_image_menu'].menuGenerator = [["jibo","no images"]];
+        }else {
+            Blockly.Blocks['jibo_image_menu'].menuGenerator = data;
+        }
+        //populate animations
+        $.getJSON( "./src/playground/assets/animdb.json", {
+            tagmode: "any",
+            format: "json"
+        })
+        .done(function( data ) {
+            let animations = [];
+            let emojis = [];
+            let eye = [];
+            let jibo_sounds = [];
+            for (a in data) {
+                if (a.indexOf("moji")>=0){
+                    emojis.push([a,data[a].path.split("animations/")[1]]);
+                }else if (a.indexOf("eye")>=0 || a.indexOf("lance")>=0){
+                    eye.push([a,data[a].path.split("animations/")[1]]);
+                }else if (a.indexOf("SSA")>=0 || a.indexOf("sfx")>=0 || a.indexOf("ei_")>=0 || a.indexOf("music_")==0){
+                    jibo_sounds.push([a,data[a].path.split("animations/")[1]]);
+                }else if (a.indexOf("hj-")>=0 || a.indexOf("ds-")>=0 || a.indexOf("alert-")>=0){
+                    //not usefull animations
+                }else{
+                    animations.push([a,data[a].path.split("animations/")[1]]);
+                }
+
+            }
+            Blockly.Blocks['jibo_animation_menu'].menuGenerator = animations;
+            Blockly.Blocks['jibo_emojis_menu'].menuGenerator = emojis;
+            Blockly.Blocks['jibo_eye_menu'].menuGenerator = eye;
+            Blockly.Blocks['jibo_sounds_menu'].menuGenerator = jibo_sounds;
+            if(callback) {
+                callback();
+            }
+            //populate sounds
+            $.getJSON( "./src/playground/assets/audio-list.json", {
+                tagmode: "any",
+                format: "json"
+            })
+            .done(function( data ) {
+                console.log(data);
+                if (data.length < 1){
+                    Blockly.Blocks['sound_sounds_menu'].menuGenerator = [["jibo","no sounds"]];
+                }else {
+                    Blockly.Blocks['sound_sounds_menu'].menuGenerator = data;
+                }
+            });
+
+        });
+
+    });
+}
+
+
 window.onload = function () {
+
     // Lots of global variables to make debugging easier
     // Instantiate the VM.
     const vm = new window.VirtualMachine();
     Scratch.vm = vm;
 
-    const storage = new Scratch.Storage();
-    const AssetType = storage.AssetType;
-    storage.addWebSource([AssetType.Project], getProjectUrl);
-    storage.addWebSource([AssetType.ImageVector, AssetType.ImageBitmap, AssetType.Sound], getAssetUrl);
-    vm.attachStorage(storage);
+    // const storage = new Scratch.Storage();
+    // const AssetType = storage.AssetType;
+    // storage.addWebSource([AssetType.Project], getProjectUrl);
+    // storage.addWebSource([AssetType.ImageVector, AssetType.ImageBitmap, AssetType.Sound], getAssetUrl);
+    // vm.attachStorage(storage);
 
-    // Loading projects from the server.
-    document.getElementById('projectLoadButton').onclick = function () {
-        document.location = `#${document.getElementById('projectId').value}`;
-        location.reload();
     };
     loadProject();
 
-    // Instantiate the renderer and connect it to the VM.
-    const canvas = document.getElementById('scratch-stage');
-    const renderer = new window.RenderWebGL(canvas);
-    Scratch.renderer = renderer;
-    vm.attachRenderer(renderer);
     const audioEngine = new window.AudioEngine();
     vm.attachAudioEngine(audioEngine);
 
     // Instantiate scratch-blocks and attach it to the DOM.
     const workspace = window.Blockly.inject('blocks', {
-        media: './media/',
+        media: './playground/media/',
+        toolboxPosition: 'end',
+        horizontalLayout: true,
         zoom: {
             controls: true,
             wheel: true,
@@ -95,39 +198,62 @@ window.onload = function () {
     flyoutWorkspace.addChangeListener(vm.flyoutBlockListener);
     flyoutWorkspace.addChangeListener(vm.monitorBlockListener);
 
-    // Create FPS counter.
-    const stats = new window.Stats();
-    document.getElementById('tab-renderexplorer').appendChild(stats.dom);
-    stats.dom.style.position = 'relative';
-    stats.begin();
 
     // Playground data tabs.
     // Block representation tab.
-    const blockexplorer = document.getElementById('blockexplorer');
+    var prev_wblocks = null;
+
     const updateBlockExplorer = function (blocks) {
-        blockexplorer.innerHTML = JSON.stringify(blocks, null, 2);
-        window.hljs.highlightBlock(blockexplorer);
+        var wblocks = [];
+        var blockevent = false;
+        if (typeof mission !== 'undefined') {
+            if (!mission_initialized){
+                missionCommander(wblocks);
+            }
+            for (var i in blocks['_blocks']) {
+                var block = {
+                    opcode: null,
+                    next: null
+                }
+
+                block.opcode = blocks['_blocks'][i]['opcode'];
+
+                if (blocks['_blocks'][i]['next'] != null) {
+                    block.next = blocks['_blocks'][blocks['_blocks'][i]['next']]['opcode'];
+                }
+                wblocks.push(block);
+            }
+            if (vm.blockevent != null) {
+                if (('blockId' in vm.blockevent) && ('newCoordinate' in vm.blockevent)) {
+                    blockevent = true;
+                }
+            }
+            if ((JSON.stringify(prev_wblocks) !== JSON.stringify(wblocks))  && blockevent) {
+                prev_wblocks = JSON.parse(JSON.stringify(wblocks));
+
+                missionCommander(wblocks);
+            }
+        }
     };
 
     // Thread representation tab.
-    const threadexplorer = document.getElementById('threadexplorer');
     let cachedThreadJSON = '';
     const updateThreadExplorer = function (newJSON) {
         if (newJSON !== cachedThreadJSON) {
             cachedThreadJSON = newJSON;
-            threadexplorer.innerHTML = cachedThreadJSON;
-            window.hljs.highlightBlock(threadexplorer);
+
         }
     };
 
     // Only request data from the VM thread if the appropriate tab is open.
-    Scratch.exploreTabOpen = false;
+    Scratch.exploreTabOpen = true;
     const getPlaygroundData = function () {
         vm.getPlaygroundData();
         if (Scratch.exploreTabOpen) {
             window.requestAnimationFrame(getPlaygroundData);
         }
     };
+
 
     // VM handlers.
     // Receipt of new playground data (thread, block representations).
@@ -143,30 +269,6 @@ window.onload = function () {
         window.Blockly.Xml.domToWorkspace(dom, workspace);
     });
 
-    // Receipt of new list of targets, selected target update.
-    const selectedTarget = document.getElementById('selectedTarget');
-    vm.on('targetsUpdate', data => {
-        // Clear select box.
-        while (selectedTarget.firstChild) {
-            selectedTarget.removeChild(selectedTarget.firstChild);
-        }
-        // Generate new select box.
-        for (let i = 0; i < data.targetList.length; i++) {
-            const targetOption = document.createElement('option');
-            targetOption.setAttribute('value', data.targetList[i].id);
-            // If target id matches editingTarget id, select it.
-            if (data.targetList[i].id === data.editingTarget) {
-                targetOption.setAttribute('selected', 'selected');
-            }
-            targetOption.appendChild(
-                document.createTextNode(data.targetList[i].name)
-            );
-            selectedTarget.appendChild(targetOption);
-        }
-    });
-    selectedTarget.onchange = function () {
-        vm.setEditingTarget(this.value);
-    };
 
     // Feedback for stacks and blocks running.
     vm.on('SCRIPT_GLOW_ON', data => {
@@ -185,61 +287,6 @@ window.onload = function () {
         workspace.reportValue(data.id, data.value);
     });
 
-    vm.on('SPRITE_INFO_REPORT', data => {
-        if (data.id !== selectedTarget.value) return; // Not the editingTarget
-        document.getElementById('sinfo-x').value = data.x;
-        document.getElementById('sinfo-y').value = data.y;
-        document.getElementById('sinfo-size').value = data.size;
-        document.getElementById('sinfo-direction').value = data.direction;
-        document.getElementById('sinfo-rotationstyle').value = data.rotationStyle;
-        document.getElementById('sinfo-visible').value = data.visible;
-    });
-
-    document.getElementById('sinfo-post').addEventListener('click', () => {
-        const data = {};
-        data.x = document.getElementById('sinfo-x').value;
-        data.y = document.getElementById('sinfo-y').value;
-        data.direction = document.getElementById('sinfo-direction').value;
-        data.rotationStyle = document.getElementById('sinfo-rotationstyle').value;
-        data.visible = document.getElementById('sinfo-visible').value === 'true';
-        vm.postSpriteInfo(data);
-    });
-
-    // Feed mouse events as VM I/O events.
-    document.addEventListener('mousemove', e => {
-        const rect = canvas.getBoundingClientRect();
-        const coordinates = {
-            x: e.clientX - rect.left,
-            y: e.clientY - rect.top,
-            canvasWidth: rect.width,
-            canvasHeight: rect.height
-        };
-        Scratch.vm.postIOData('mouse', coordinates);
-    });
-    canvas.addEventListener('mousedown', e => {
-        const rect = canvas.getBoundingClientRect();
-        const data = {
-            isDown: true,
-            x: e.clientX - rect.left,
-            y: e.clientY - rect.top,
-            canvasWidth: rect.width,
-            canvasHeight: rect.height
-        };
-        Scratch.vm.postIOData('mouse', data);
-        e.preventDefault();
-    });
-    canvas.addEventListener('mouseup', e => {
-        const rect = canvas.getBoundingClientRect();
-        const data = {
-            isDown: false,
-            x: e.clientX - rect.left,
-            y: e.clientY - rect.top,
-            canvasWidth: rect.width,
-            canvasHeight: rect.height
-        };
-        Scratch.vm.postIOData('mouse', data);
-        e.preventDefault();
-    });
 
     // Feed keyboard events as VM I/O events.
     document.addEventListener('keydown', e => {
@@ -271,7 +318,7 @@ window.onload = function () {
 
     // Inform VM of animation frames.
     const animate = function () {
-        stats.update();
+        //stats.update();
         requestAnimationFrame(animate);
     };
     requestAnimationFrame(animate);
@@ -283,53 +330,19 @@ window.onload = function () {
     document.getElementById('stopall').addEventListener('click', () => {
         vm.stopAll();
     });
-    document.getElementById('turbomode').addEventListener('change', () => {
-        const turboOn = document.getElementById('turbomode').checked;
-        vm.setTurboMode(turboOn);
-    });
-    document.getElementById('compatmode').addEventListener('change',
-        () => {
-            const compatibilityMode = document.getElementById('compatmode').checked;
-            vm.setCompatibilityMode(compatibilityMode);
-        });
-    const tabBlockExplorer = document.getElementById('tab-blockexplorer');
-    const tabThreadExplorer = document.getElementById('tab-threadexplorer');
-    const tabRenderExplorer = document.getElementById('tab-renderexplorer');
-    const tabImportExport = document.getElementById('tab-importexport');
 
-    // Handlers to show different explorers.
-    document.getElementById('threadexplorer-link').addEventListener('click',
-        () => {
-            Scratch.exploreTabOpen = true;
-            getPlaygroundData();
-            tabBlockExplorer.style.display = 'none';
-            tabRenderExplorer.style.display = 'none';
-            tabThreadExplorer.style.display = 'block';
-            tabImportExport.style.display = 'none';
-        });
-    document.getElementById('blockexplorer-link').addEventListener('click',
-        () => {
-            Scratch.exploreTabOpen = true;
-            getPlaygroundData();
-            tabBlockExplorer.style.display = 'block';
-            tabRenderExplorer.style.display = 'none';
-            tabThreadExplorer.style.display = 'none';
-            tabImportExport.style.display = 'none';
-        });
-    document.getElementById('renderexplorer-link').addEventListener('click',
-        () => {
-            Scratch.exploreTabOpen = false;
-            tabBlockExplorer.style.display = 'none';
-            tabRenderExplorer.style.display = 'block';
-            tabThreadExplorer.style.display = 'none';
-            tabImportExport.style.display = 'none';
-        });
-    document.getElementById('importexport-link').addEventListener('click',
-        () => {
-            Scratch.exploreTabOpen = false;
-            tabBlockExplorer.style.display = 'none';
-            tabRenderExplorer.style.display = 'none';
-            tabThreadExplorer.style.display = 'none';
-            tabImportExport.style.display = 'block';
-        });
-};
+    setTimeout(clearVariables,1000);
+    //tabImportExport.style.display = 'block';
+    Scratch.exploreTabOpen = true;
+    setTimeout(getPlaygroundData,1000);
+
+    populateMedia();
+
+
+
+function clearVariables() {
+    var variables = window.Scratch.workspace.getAllVariables();
+    variables.forEach(variable => {
+        window.Scratch.workspace.deleteVariable(variable.name);
+    });
+}

@@ -1,5 +1,5 @@
 body {
-    background: rgb(36,36,36);
+    background-color: #334771;
 }
 a {
     color: rgb(217,217,217);
@@ -9,11 +9,18 @@ h2 {
 }
 #blocks {
     position: absolute;
-    left: 40%;
+    left: 0%;
     right: 0;
     top: 0;
     bottom: 0;
+    z-index: 1;
     font-family: "Helvetica Neue", Helvetica, sans-serif;
+}
+#projectButtons {
+    position: absolute;
+    left: 5%;
+    top: 5%;
+    z-index: 2;
 }
 #vm-devtools {
     color: rgb(217,217,217);
@@ -28,7 +35,6 @@ h2 {
     position: absolute;
     height: 75%;
     overflow: scroll;
-    border: 1px solid #fff;
     background: rgb(36,36,36);
     color: rgb(217,217,217);
     font-family: monospace;
